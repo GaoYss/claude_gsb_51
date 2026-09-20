@@ -7,6 +7,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"streetlight/internal/modules/areafault"
 	"streetlight/internal/modules/fault"
 	"streetlight/internal/modules/lamp"
 	"streetlight/internal/modules/repair"
@@ -143,6 +144,10 @@ func seed(db *gorm.DB) error {
 	}
 
 	if err := syncSeedLampStatus(db, faults, lamps); err != nil {
+		return err
+	}
+
+	if err := seedAreaFaults(db, lamps, now); err != nil {
 		return err
 	}
 
@@ -374,5 +379,215 @@ func syncSeedLampStatus(db *gorm.DB, faults []fault.Fault, lamps []lamp.Lamp) er
 			return fmt.Errorf("同步演示路灯运行状态失败: %w", err)
 		}
 	}
+	return nil
+}
+
+// seedAreaItem 描述区域故障中一盏路灯的演示处置情况, handledAgo 为 0 表示尚未处置。
+type seedAreaItem struct {
+	lampIndex  int
+	result     string
+	handledAgo time.Duration
+	remark     string
+}
+
+// seedAreaCase 描述一条区域故障演示场景。
+type seedAreaCase struct {
+	cause        string
+	circuitName  string
+	roadName     string
+	faultType    string
+	level        string
+	description  string
+	reporter     string
+	reportedAgo  time.Duration
+	dispatchedAgo time.Duration // 为 0 表示尚未派工
+	restoredAgo  time.Duration // 全部恢复时刻, 为 0 表示未全部恢复
+	closedAgo    time.Duration // 闭环时刻, 为 0 表示未闭环
+	items        []seedAreaItem
+}
+
+// seedAreaFaults 写入区域故障演示数据: 同一回路多盏路灯受影响, 统一派工、逐盏处置。
+func seedAreaFaults(db *gorm.DB, lamps []lamp.Lamp, now time.Time) error {
+	cases := []seedAreaCase{
+		{
+			cause: areafault.CauseLine, circuitName: "滨江路东段回路", roadName: "滨江路",
+			faultType: "线路故障", level: fault.LevelUrgent, reporter: "监控中心",
+			description: "地埋电缆中间接头击穿, 滨江路东段同回路 3 盏路灯同时失电",
+			reportedAgo: 8 * hour, dispatchedAgo: 7 * hour,
+			items: []seedAreaItem{
+				{lampIndex: 15, result: areafault.ItemResultRecovered, handledAgo: 3 * hour, remark: "更换防水中间接头并复测绝缘, 恢复正常"},
+				{lampIndex: 16, result: areafault.ItemResultRecovered, handledAgo: 3 * hour, remark: "送电后复测电压电流正常"},
+				{lampIndex: 17, result: areafault.ItemResultParts, handledAgo: 2 * hour, remark: "灯杆内接线端子烧毁, 防水端子缺货待料"},
+			},
+		},
+		{
+			cause: areafault.CauseCabinet, circuitName: "解放路控制箱-A", roadName: "解放路",
+			faultType: "控制箱故障", level: fault.LevelHigh, reporter: "监控中心",
+			description: "控制箱主控接触器粘连, 该箱供电的 4 盏路灯夜间不亮",
+			reportedAgo: 30 * hour, dispatchedAgo: 29 * hour, restoredAgo: 26 * hour, closedAgo: 25 * hour,
+			items: []seedAreaItem{
+				{lampIndex: 20, result: areafault.ItemResultRecovered, handledAgo: 26 * hour, remark: "更换交流接触器, 恢复远程开关灯"},
+				{lampIndex: 21, result: areafault.ItemResultRecovered, handledAgo: 26 * hour, remark: "更换交流接触器, 恢复远程开关灯"},
+				{lampIndex: 22, result: areafault.ItemResultRecovered, handledAgo: 27 * hour, remark: "紧固端子后随箱恢复供电"},
+				{lampIndex: 23, result: areafault.ItemResultRecovered, handledAgo: 27 * hour, remark: "紧固端子后随箱恢复供电"},
+			},
+		},
+		{
+			cause: areafault.CauseLine, circuitName: "学院路北侧支路", roadName: "学院路",
+			faultType: "线路故障", level: fault.LevelHigh, reporter: "王建国",
+			description: "夜间巡检发现学院路北侧支路跳闸, 初步判断线路接地, 3 盏路灯失电",
+			reportedAgo: 2 * hour,
+			items: []seedAreaItem{
+				{lampIndex: 25},
+				{lampIndex: 26},
+				{lampIndex: 27},
+			},
+		},
+	}
+
+	areas := make([]areafault.AreaFault, 0, len(cases))
+	areaItems := make([]areafault.AreaFaultItem, 0)
+	linkedFaults := make([]fault.Fault, 0)
+	lampStatus := map[uint]string{}
+	areaSeq, faultSeq := 0, 9000
+
+	for _, item := range cases {
+		reportedAt := now.Add(-item.reportedAgo)
+		areaSeq++
+		area := areafault.AreaFault{
+			AreaNo:      fmt.Sprintf("QY%s%04d", reportedAt.Format("20060102"), areaSeq),
+			Cause:       item.cause,
+			CircuitName: item.circuitName,
+			RoadName:    item.roadName,
+			FaultType:   item.faultType,
+			FaultLevel:  item.level,
+			Description: item.description,
+			Reporter:    item.reporter,
+			ReportedAt:  reportedAt,
+			Status:      areafault.StatusPending,
+			TotalCount:  len(item.items),
+			PendingCount: len(item.items),
+		}
+		if item.dispatchedAgo > 0 {
+			dispatchedAt := now.Add(-item.dispatchedAgo)
+			area.DispatchedAt = &dispatchedAt
+			area.Status = areafault.StatusDispatched
+			area.Assignee = "周涛"
+			area.RepairTeam = "市政照明二班"
+			area.ContactPhone = "13900005678"
+		}
+		if item.restoredAgo > 0 {
+			restoredAt := now.Add(-item.restoredAgo)
+			area.AllRestoredAt = &restoredAt
+			area.Status = areafault.StatusRestored
+		}
+		if item.closedAgo > 0 {
+			closedAt := now.Add(-item.closedAgo)
+			area.ClosedAt = &closedAt
+			area.CloseRemark = "回路送电正常, 逐盏复核全部恢复, 区域故障闭环"
+			area.Status = areafault.StatusClosed
+		}
+		if err := db.Create(&area).Error; err != nil {
+			return fmt.Errorf("写入区域故障演示数据失败: %w", err)
+		}
+
+		recovered := 0
+		for _, detail := range item.items {
+			device := lamps[detail.lampIndex]
+			faultSeq++
+			linked := fault.Fault{
+				FaultNo:      fmt.Sprintf("GD%s%04d", reportedAt.Format("20060102"), faultSeq),
+				LampID:       device.ID,
+				LampCode:     device.Code,
+				RoadName:     device.RoadName,
+				FaultType:    item.faultType,
+				FaultLevel:   item.level,
+				Source:       fault.SourceMonitoring,
+				Description:  item.description + "(区域故障 " + area.AreaNo + ")",
+				Reporter:     item.reporter,
+				ReporterPhone: "13800001234",
+				ReportedAt:   reportedAt,
+				Status:       fault.StatusPending,
+			}
+
+			result := detail.result
+			if result == "" {
+				result = areafault.ItemResultPending
+			}
+			switch result {
+			case areafault.ItemResultRecovered:
+				recovered++
+				handledAt := now.Add(-detail.handledAgo)
+				linked.Status = fault.StatusClosed
+				linked.ClosedAt = &handledAt
+				linked.CloseRemark = "区域故障逐盏复核已恢复"
+			case areafault.ItemResultPending:
+				lampStatus[device.ID] = lamp.RunStatusFault
+			default:
+				// 待配件/观察中/无法修复: 关联故障停留在维修中, 计为遗留。
+				linked.Status = fault.StatusProcessing
+				lampStatus[device.ID] = lamp.RunStatusMaintenance
+			}
+			linkedFaults = append(linkedFaults, linked)
+		}
+		areas = append(areas, area)
+	}
+
+	// 先落逐灯关联故障, 拿到故障 ID 后再写明细。
+	if err := db.Create(&linkedFaults).Error; err != nil {
+		return fmt.Errorf("写入区域故障关联的故障演示数据失败: %w", err)
+	}
+
+	faultCursor := 0
+	for areaIndex, item := range cases {
+		area := areas[areaIndex]
+		recovered := 0
+		for _, detail := range item.items {
+			device := lamps[detail.lampIndex]
+			linked := linkedFaults[faultCursor]
+			faultCursor++
+
+			result := detail.result
+			if result == "" {
+				result = areafault.ItemResultPending
+			}
+			record := areafault.AreaFaultItem{
+				AreaFaultID: area.ID,
+				LampID:      device.ID,
+				LampCode:    device.Code,
+				RoadName:    device.RoadName,
+				FaultID:     &linked.ID,
+				Result:      result,
+				Handler:     area.Assignee,
+				HandleRemark: detail.remark,
+			}
+			if detail.handledAgo > 0 {
+				handledAt := now.Add(-detail.handledAgo)
+				record.HandledAt = &handledAt
+			}
+			if result == areafault.ItemResultRecovered {
+				recovered++
+			}
+			areaItems = append(areaItems, record)
+		}
+
+		area.RecoveredCount = recovered
+		area.PendingCount = area.TotalCount - recovered
+		if err := db.Save(&area).Error; err != nil {
+			return fmt.Errorf("回填区域故障进度失败: %w", err)
+		}
+	}
+
+	if err := db.Create(&areaItems).Error; err != nil {
+		return fmt.Errorf("写入区域故障明细演示数据失败: %w", err)
+	}
+
+	for lampID, status := range lampStatus {
+		if err := db.Model(&lamp.Lamp{}).Where("id = ?", lampID).Update("run_status", status).Error; err != nil {
+			return fmt.Errorf("同步区域故障路灯状态失败: %w", err)
+		}
+	}
+
+	slog.Info("区域故障演示数据初始化完成", "区域故障", len(areas), "受影响路灯", len(areaItems))
 	return nil
 }

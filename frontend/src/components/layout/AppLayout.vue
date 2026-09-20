@@ -39,6 +39,8 @@ const menus = [
   { path: '/lamps', title: '路灯台账', icon: 'Postcard' },
   { path: '/faults', title: '故障登记', icon: 'Warning' },
   { path: '/repairs', title: '维修记录录入', icon: 'Tools' },
+  { path: '/area-faults', title: '区域故障处置', icon: 'Lightning' },
+  { path: '/area-faults/circuit', title: '区域故障回路概览', icon: 'Grid' },
   { path: '/status', title: '维修状态查询', icon: 'Search' },
   { path: '/status/track', title: '维修进度追踪', icon: 'Guide' },
 ]

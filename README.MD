@@ -17,9 +17,10 @@
 | 路灯台账 | 路灯基础档案维护 | 编号/道路/运行状态/灯具类型筛选, 按道路与状态统计, 删除前校验未闭环故障 |
 | 故障登记 | 故障工单登记与流转 | 自动生成故障单号, 紧急程度分级, 状态机流转, 闭环关闭 |
 | 维修记录录入 | 针对故障单登记维修过程 | 自动生成维修单号, 开工/完工时间, 耗材与费用, 四种维修结果 |
+| 区域故障处置 | 线路/控制箱故障的区域性处置 | 一条区域故障关联同一回路多盏路灯, 统一派工、逐盏登记处置结果, 全部恢复后才允许整体闭环, 按回路概览影响范围/恢复耗时/遗留数量 |
 | 维修状态查询 | 只读的综合看板与追踪视图 | 全局概览, 路灯级维修状态列表, 按故障单号/路灯编号的全链路时间线 |
 
-四个模块在后端是四个平级的独立包 (`internal/modules/{lamp,fault,repair,status}`), 在前端是四组独立的视图与子组件, 互不耦合; 新增一个业务模块只需要实现 `module.Module` 接口并注册。
+五个模块在后端是五个平级的独立包 (`internal/modules/{lamp,fault,repair,areafault,status}`), 在前端是五组独立的视图与子组件, 互不耦合; 新增一个业务模块只需要实现 `module.Module` 接口并注册。
 
 ---
 
@@ -45,6 +46,7 @@
 │   │   │   ├── lamp/                     #   路灯台账
 │   │   │   ├── fault/                    #   故障登记
 │   │   │   ├── repair/                   #   维修记录录入
+│   │   │   ├── areafault/                #   区域故障处置(线路/控制箱, 逐盏处置)
 │   │   │   └── status/                   #   维修状态查询(只读, 不建表)
 │   │   ├── response/                     # 统一响应信封 Envelope / PageData / OK / Fail
 │   ├── pkg/pagination/                   # 分页与排序参数(排序字段白名单)
@@ -68,6 +70,7 @@
 │   │       ├── lamp/LampListView.vue + components/LampFormDialog.vue
 │   │       ├── fault/FaultListView.vue + components/{FaultFormDialog,FaultDetailDrawer}.vue
 │   │       ├── repair/RepairListView.vue + components/{RepairFormDialog,FinishRepairDialog}.vue
+│   │       ├── areafault/AreaFaultListView.vue + AreaCircuitView.vue + components/{AreaFaultFormDialog,AreaDispatchDialog,ItemHandleDialog,AreaFaultDetailDrawer}.vue
 │   │       └── status/{StatusLampView,StatusTrackView}.vue
 │   ├── nginx.conf                        # 生产: SPA 回退 + /api 反向代理
 │   ├── Dockerfile
@@ -105,10 +108,11 @@ modules/<name>/
 lamp.New(db)                                   -> 路灯台账(无依赖)
 fault.New(db, lampService)                     -> 故障登记(读取路灯校验)
 repair.New(db, faultService)                   -> 维修记录(驱动故障状态流转)
+areafault.New(db, lampService, faultService)   -> 区域故障(批量建单/兜底闭环, 驱动路灯状态)
 status.New(db, lampRepo, faultRepo, repairRepo)-> 维修状态查询(只读聚合)
 ```
 
-路灯运行状态需要根据故障反向回填, 但 `lamp` 不能依赖 `fault`, 因此用 `lampService.SetOpenFaultCounter(faultModule.Repository())` 注入一个统计端口, 避免构造函数循环依赖。
+路灯运行状态需要根据故障反向回填, 但 `lamp` 不能依赖 `fault`, 因此用 `lampService.SetOpenFaultCounter(faultModule.Repository())` 注入一个统计端口, 避免构造函数循环依赖; 区域故障删除路灯的校验同理, 通过 `SetOpenAreaFaultCounter` 注入。
 
 ### 3.3 统一响应与错误
 
@@ -292,6 +296,21 @@ go test ./...
 | GET | `/status/lamps` | 路灯级维修状态列表(可只看未闭环) |
 | GET | `/status/track` | 全链路追踪, 参数 `fault_no` 或 `lamp_code` |
 
+### 区域故障处置
+
+基础路径 `/api/v1/area-faults`。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/area-faults` | 分页查询(状态/诱因/等级/回路/道路/关键字, 可仅看未闭环) |
+| POST | `/area-faults` | 建立区域故障, 关联同一回路多盏路灯并逐盏生成故障单(任一灯存在未闭环故障返回 409) |
+| GET | `/area-faults/meta` | 字典: 状态/诱因/逐盏处置结果/故障类型/等级 |
+| GET | `/area-faults/overview` | 按回路概览: 影响范围、平均恢复耗时、遗留数量 |
+| GET | `/area-faults/:id` | 详情(含逐盏处置明细) |
+| POST | `/area-faults/:id/dispatch` | 统一派工(负责人/班组), 待派工 -> 处置中 |
+| POST | `/area-faults/:id/close` | 整体闭环, 仍有遗留路灯时返回 409 |
+| POST | `/area-faults/items/:itemId/handle` | 逐盏登记处置结果(已恢复/待配件/观察中/无法修复) |
+
 ---
 
 ## 八、业务规则
@@ -302,8 +321,12 @@ go test ./...
 - **维修结果**: 只有 `已修复(fixed)` 会把故障推进到 `已修复`, 其余结果保持 `维修中`。
 - **路灯运行状态自动联动**: 存在 `维修中` 故障 -> `维修中(maintenance)`; 存在 `待处理` 故障 -> `故障(fault)`; 否则 -> `正常(normal)`; `停用(offline)` 由人工维护。
 - **删除维修记录** 会重算故障的 `repair_count` / `latest_repair_id`, 次数归零时把故障从 `维修中` 回退到 `待处理`。
-- **删除路灯** 会被未闭环故障拦截; **删除故障** 要求已关闭且没有维修记录。
+- **删除路灯** 会被未闭环故障或未闭环区域故障拦截; **删除故障** 要求已关闭且没有维修记录。
 - **逾期判定**: 上报超过 24 小时仍未闭环的故障计入概览的逾期清单。
+- **区域故障(区域性故障处置)**: 线路或控制箱故障导致同一回路多盏路灯受影响时, 建立一条区域故障并一次性关联多盏路灯, 系统为每盏路灯各生成一条故障单; 派工与闭环在区域故障上统一推进, 处置结果逐盏登记(`已恢复 / 待配件 / 观察中 / 无法修复`)。
+  - 单号 `QY + YYYYMMDD + 4 位序号`; 状态机 `待派工 -> 处置中 -> 全部恢复 -> 已闭环`, 返修改判会从 `全部恢复` 回退到 `处置中`。
+  - 只有逐盏结果**全部为已恢复**(`遗留 = 0`)才允许整体闭环, 否则返回 409; 逐盏登记为已恢复时会兜底闭环对应故障单并联动路灯状态。
+  - 建单时任一关联路灯已存在未闭环故障会被 409 拦截; 概览按回路聚合影响灯数、平均恢复耗时(上报到全部恢复)与遗留数量。
 
 ---
 
@@ -314,5 +337,6 @@ go test ./...
 - 6 条道路, 每条 5 盏路灯, 共 **30 盏**, 覆盖 `正常 / 故障 / 维修中 / 停用` 四种运行状态;
 - **14 条故障**, 覆盖待处理 / 维修中 / 已修复 / 已关闭四种状态, 其中包含 2 条已逾期;
 - **12 条维修记录**, 含进行中与已完工, 带耗材、费用与维修结果。
+- **3 条区域故障**, 覆盖待派工(3 盏全部待处置)、处置中(2 盏已恢复 + 1 盏待配件遗留)、已闭环(4 盏全部恢复, 带恢复耗时)三种场景, 关联滨江路、解放路、学院路同一回路的多盏路灯。
 
 想从空库开始, 把 `APP_SEED` 设为 `false`, 或删除数据卷后重启。

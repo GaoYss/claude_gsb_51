@@ -32,6 +32,18 @@ const routes = [
         meta: { title: '维修记录录入', icon: 'Tools' },
       },
       {
+        path: 'area-faults',
+        name: 'area-faults',
+        component: () => import('@/views/areafault/AreaFaultListView.vue'),
+        meta: { title: '区域故障处置', icon: 'Lightning' },
+      },
+      {
+        path: 'area-faults/circuit',
+        name: 'area-fault-circuit',
+        component: () => import('@/views/areafault/AreaCircuitView.vue'),
+        meta: { title: '区域故障回路概览', icon: 'Grid' },
+      },
+      {
         path: 'status',
         name: 'status',
         component: () => import('@/views/status/StatusLampView.vue'),

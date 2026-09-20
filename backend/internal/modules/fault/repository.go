@@ -191,6 +191,44 @@ func (r *Repository) GetOpenByLamp(ctx context.Context, lampID uint) (*Fault, er
 	return &entity, nil
 }
 
+// CountOpenByLamps 批量统计多盏路灯各自的未闭环故障数量, 供区域故障建单前批量校验。
+func (r *Repository) CountOpenByLamps(ctx context.Context, lampIDs []uint) (map[uint]int64, error) {
+	type row struct {
+		LampID uint
+		Total  int64
+	}
+	rows := make([]row, 0)
+	result := make(map[uint]int64, len(lampIDs))
+	if len(lampIDs) == 0 {
+		return result, nil
+	}
+	err := r.session(ctx).Model(&Fault{}).
+		Select("lamp_id, COUNT(*) AS total").
+		Where("lamp_id IN ? AND status IN ?", lampIDs, []string{StatusPending, StatusProcessing}).
+		Group("lamp_id").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("批量统计路灯未闭环故障失败: %w", err)
+	}
+	for _, item := range rows {
+		result[item.LampID] = item.Total
+	}
+	return result, nil
+}
+
+// CountByIDs 按主键批量统计存在的故障数量, 供区域故障明细校验引用完整性。
+func (r *Repository) CountByIDs(ctx context.Context, ids []uint) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	var total int64
+	err := r.session(ctx).Model(&Fault{}).Where("id IN ?", ids).Count(&total).Error
+	if err != nil {
+		return 0, fmt.Errorf("批量统计故障失败: %w", err)
+	}
+	return total, nil
+}
+
 // CountOpenByLamp 统计某盏路灯未闭环故障数量, 实现路灯模块的 OpenFaultCounter 端口。
 func (r *Repository) CountOpenByLamp(ctx context.Context, lampID uint) (int64, error) {
 	var count int64

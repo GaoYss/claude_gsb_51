@@ -29,10 +29,16 @@ type OpenFaultCounter interface {
 	CountOpenByLamp(ctx context.Context, lampID uint) (int64, error)
 }
 
+// OpenAreaFaultCounter 由区域故障模块实现, 用于删除路灯前校验是否仍关联未闭环区域故障。
+type OpenAreaFaultCounter interface {
+	CountOpenByLamp(ctx context.Context, lampID uint) (int64, error)
+}
+
 // Service 承载路灯台账的业务规则。
 type Service struct {
-	repo   *Repository
-	faults OpenFaultCounter
+	repo        *Repository
+	faults      OpenFaultCounter
+	areaFaults  OpenAreaFaultCounter
 }
 
 // NewService 构造路灯台账服务。
@@ -46,9 +52,19 @@ func (s *Service) SetOpenFaultCounter(counter OpenFaultCounter) {
 	s.faults = counter
 }
 
+// SetOpenAreaFaultCounter 注入未闭环区域故障计数器。
+func (s *Service) SetOpenAreaFaultCounter(counter OpenAreaFaultCounter) {
+	s.areaFaults = counter
+}
+
 // Get 查询路灯详情。
 func (s *Service) Get(ctx context.Context, id uint) (*Lamp, error) {
 	return s.repo.GetByID(ctx, id)
+}
+
+// ListByIDs 按主键批量查询路灯, 供区域故障一次关联同一回路的多盏路灯。
+func (s *Service) ListByIDs(ctx context.Context, ids []uint) ([]Lamp, error) {
+	return s.repo.ListByIDs(ctx, ids)
 }
 
 // List 分页查询路灯台账, 同时返回归一化后的分页信息供响应封装使用。
@@ -206,6 +222,15 @@ func (s *Service) Delete(ctx context.Context, id uint) error {
 		}
 		if count > 0 {
 			return apperr.Conflict("该路灯存在 %d 条未关闭的故障记录, 请先处理后再删除", count)
+		}
+	}
+	if s.areaFaults != nil {
+		count, err := s.areaFaults.CountOpenByLamp(ctx, id)
+		if err != nil {
+			return err
+		}
+		if count > 0 {
+			return apperr.Conflict("该路灯关联 %d 条未闭环的区域故障, 请先处理后再删除", count)
 		}
 	}
 	return s.repo.Delete(ctx, id)

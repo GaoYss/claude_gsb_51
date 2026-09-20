@@ -74,6 +74,11 @@ func (s *Service) ListByLamp(ctx context.Context, lampID uint) ([]Fault, error) 
 	return s.repo.ListByLamp(ctx, lampID)
 }
 
+// CountOpenByLamps 批量统计多盏路灯各自的未闭环故障数量, 供区域故障建单前校验。
+func (s *Service) CountOpenByLamps(ctx context.Context, lampIDs []uint) (map[uint]int64, error) {
+	return s.repo.CountOpenByLamps(ctx, lampIDs)
+}
+
 // Create 登记故障: 校验路灯存在、无未闭环故障后落库, 并同步路灯运行状态。
 func (s *Service) Create(ctx context.Context, req CreateRequest) (*Fault, error) {
 	device, err := s.lamps.Get(ctx, req.LampID)

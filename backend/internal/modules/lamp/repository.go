@@ -77,6 +77,18 @@ func (r *Repository) GetByCode(ctx context.Context, code string) (*Lamp, error) 
 	return &entity, nil
 }
 
+// ListByIDs 按主键批量查询路灯, 结果保持数据库返回顺序, 供区域故障一次关联多盏路灯使用。
+func (r *Repository) ListByIDs(ctx context.Context, ids []uint) ([]Lamp, error) {
+	entities := make([]Lamp, 0, len(ids))
+	if len(ids) == 0 {
+		return entities, nil
+	}
+	if err := r.session(ctx).Where("id IN ?", ids).Find(&entities).Error; err != nil {
+		return nil, fmt.Errorf("批量查询路灯失败: %w", err)
+	}
+	return entities, nil
+}
+
 // ExistsByCode 判断路灯编号是否已被占用, excludeID 用于更新场景排除自身。
 func (r *Repository) ExistsByCode(ctx context.Context, code string, excludeID uint) (bool, error) {
 	query := r.session(ctx).Model(&Lamp{}).Where("code = ?", strings.TrimSpace(code))

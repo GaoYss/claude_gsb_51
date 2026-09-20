@@ -52,6 +52,29 @@ export const TIMELINE_STAGE = {
   closed: { label: '故障关闭', type: 'info' },
 }
 
+// 区域故障处置状态。
+export const AREA_STATUS = {
+  pending: { label: '待派工', type: 'danger' },
+  dispatched: { label: '处置中', type: 'warning' },
+  restored: { label: '全部恢复', type: 'success' },
+  closed: { label: '已闭环', type: 'info' },
+}
+
+// 区域故障诱因。
+export const AREA_CAUSE = {
+  line: { label: '线路故障', type: 'warning' },
+  cabinet: { label: '控制箱故障', type: 'danger' },
+}
+
+// 区域故障逐盏处置结果。
+export const AREA_ITEM_RESULT = {
+  pending: { label: '待处置', type: 'info' },
+  recovered: { label: '已恢复', type: 'success' },
+  parts: { label: '待配件', type: 'warning' },
+  observing: { label: '观察中', type: 'primary' },
+  unfixable: { label: '无法修复', type: 'danger' },
+}
+
 // 取字典项文案。
 export function dictLabel(dict, key, fallback = '-') {
   if (key === null || key === undefined || key === '') return fallback
