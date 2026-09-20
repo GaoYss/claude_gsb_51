@@ -46,6 +46,7 @@ type Lamp struct {
 	Name        string     `gorm:"size:128" json:"name"`
 	RoadName    string     `gorm:"size:128;index;not null" json:"road_name"`
 	District    string     `gorm:"size:64;index" json:"district"`
+	CircuitCode string     `gorm:"size:64;index" json:"circuit_code"` // 所属照明回路编号, 区域故障按回路归集
 	Address     string     `gorm:"size:255" json:"address"`
 	Longitude   float64    `json:"longitude"`
 	Latitude    float64    `json:"latitude"`

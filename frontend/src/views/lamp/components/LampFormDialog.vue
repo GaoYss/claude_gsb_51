@@ -36,7 +36,14 @@
             </el-select>
           </el-form-item>
         </el-col>
-        <el-col :span="24">
+        <el-col :span="12">
+          <el-form-item label="所属回路" prop="circuit_code">
+            <el-select v-model="form.circuit_code" filterable allow-create clearable placeholder="选择或输入照明回路编号" style="width: 100%">
+              <el-option v-for="item in circuitOptions" :key="item" :label="item" :value="item" />
+            </el-select>
+          </el-form-item>
+        </el-col>
+        <el-col :span="12">
           <el-form-item label="安装位置" prop="address">
             <el-input v-model="form.address" placeholder="例如 中山路200号门前" />
           </el-form-item>
@@ -107,6 +114,7 @@ const props = defineProps({
   nextCode: { type: String, default: '' },
   roadOptions: { type: Array, default: () => [] },
   districtOptions: { type: Array, default: () => [] },
+  circuitOptions: { type: Array, default: () => [] },
   lampTypeOptions: { type: Array, default: () => [] },
 })
 
@@ -121,6 +129,7 @@ const createForm = () => ({
   name: '',
   road_name: '',
   district: '',
+  circuit_code: '',
   address: '',
   lamp_type: 'LED',
   power: 100,

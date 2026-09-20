@@ -99,6 +99,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*Lamp, error) 
 		Name:        strings.TrimSpace(req.Name),
 		RoadName:    roadName,
 		District:    strings.TrimSpace(req.District),
+		CircuitCode: strings.TrimSpace(req.CircuitCode),
 		Address:     strings.TrimSpace(req.Address),
 		Longitude:   valueOrFloat(req.Longitude, 0),
 		Latitude:    valueOrFloat(req.Latitude, 0),
@@ -151,6 +152,9 @@ func (s *Service) Update(ctx context.Context, id uint, req UpdateRequest) (*Lamp
 	}
 	if req.District != nil {
 		entity.District = strings.TrimSpace(*req.District)
+	}
+	if req.CircuitCode != nil {
+		entity.CircuitCode = strings.TrimSpace(*req.CircuitCode)
 	}
 	if req.Address != nil {
 		entity.Address = strings.TrimSpace(*req.Address)
@@ -247,16 +251,21 @@ func (s *Service) Options(ctx context.Context) (*Options, error) {
 	if err != nil {
 		return nil, err
 	}
+	circuits, err := s.repo.DistinctValues(ctx, "circuit_code")
+	if err != nil {
+		return nil, err
+	}
 	nextCode, err := s.repo.NextCode(ctx)
 	if err != nil {
 		return nil, err
 	}
 	return &Options{
-		Roads:       roads,
-		Districts:   districts,
-		LampTypes:   LampTypes(),
-		RunStatuses: RunStatuses(),
-		NextCode:    nextCode,
+		Roads:        roads,
+		Districts:    districts,
+		CircuitCodes: circuits,
+		LampTypes:    LampTypes(),
+		RunStatuses:  RunStatuses(),
+		NextCode:     nextCode,
 	}, nil
 }
 

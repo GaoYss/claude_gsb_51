@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	"streetlight/internal/apperr"
+	"streetlight/pkg/dbtx"
 	"streetlight/pkg/pagination"
 )
 
@@ -39,7 +40,7 @@ func NewRepository(db *gorm.DB) *Repository {
 }
 
 func (r *Repository) session(ctx context.Context) *gorm.DB {
-	return r.db.WithContext(ctx)
+	return dbtx.Session(ctx, r.db)
 }
 
 // Create 新增故障记录。
@@ -173,6 +174,40 @@ func (r *Repository) ListByLamp(ctx context.Context, lampID uint) ([]Fault, erro
 		return nil, fmt.Errorf("查询路灯故障失败: %w", err)
 	}
 	return entities, nil
+}
+
+// ListByRegion 查询区域故障单下的全部子故障, 按路灯序号排序。
+func (r *Repository) ListByRegion(ctx context.Context, regionID uint) ([]Fault, error) {
+	entities := make([]Fault, 0)
+	err := r.session(ctx).Where("region_id = ?", regionID).Order("id ASC").Find(&entities).Error
+	if err != nil {
+		return nil, fmt.Errorf("查询区域故障子单失败: %w", err)
+	}
+	return entities, nil
+}
+
+// CountOpenByRegion 统计区域故障单下未闭环(待处理/维修中/已修复)的子故障数量。
+func (r *Repository) CountOpenByRegion(ctx context.Context, regionID uint) (int64, error) {
+	var count int64
+	err := r.session(ctx).Model(&Fault{}).
+		Where("region_id = ? AND status <> ?", regionID, StatusClosed).
+		Count(&count).Error
+	if err != nil {
+		return 0, fmt.Errorf("统计区域未闭环子故障失败: %w", err)
+	}
+	return count, nil
+}
+
+// CountRepairedByRegion 统计区域故障单下已修复待闭环的子故障数量。
+func (r *Repository) CountByRegionAndStatus(ctx context.Context, regionID uint, statuses []string) (int64, error) {
+	var count int64
+	err := r.session(ctx).Model(&Fault{}).
+		Where("region_id = ? AND status IN ?", regionID, statuses).
+		Count(&count).Error
+	if err != nil {
+		return 0, fmt.Errorf("统计区域子故障状态失败: %w", err)
+	}
+	return count, nil
 }
 
 // GetOpenByLamp 查询某盏路灯当前未闭环的故障, 不存在时返回 nil。

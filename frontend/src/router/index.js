@@ -26,6 +26,12 @@ const routes = [
         meta: { title: '故障登记', icon: 'Warning' },
       },
       {
+        path: 'regions',
+        name: 'regions',
+        component: () => import('@/views/region/RegionListView.vue'),
+        meta: { title: '区域故障处置', icon: 'Connection' },
+      },
+      {
         path: 'repairs',
         name: 'repairs',
         component: () => import('@/views/repair/RepairListView.vue'),

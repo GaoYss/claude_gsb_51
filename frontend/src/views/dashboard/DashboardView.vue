@@ -119,6 +119,38 @@
       </el-col>
     </el-row>
 
+    <el-card shadow="never" class="region-card">
+      <div class="section-title">
+        <span>区域故障 · 按回路概览</span>
+        <el-button link type="primary" @click="$router.push('/regions')">进入区域故障处置</el-button>
+      </div>
+      <el-table :data="regionCircuit.circuits" size="small" v-loading="regionLoading">
+        <el-table-column prop="circuit_code" label="回路编号" width="150" />
+        <el-table-column label="涉及道路" min-width="140">
+          <template #default="{ row }">{{ (row.road_names || []).join('、') || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="区域单(未闭环)" width="130" align="center">
+          <template #default="{ row }">
+            {{ row.region_total }}
+            <el-tag v-if="row.open_total" type="warning" size="small" effect="plain">{{ row.open_total }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="影响范围" width="100" align="center">
+          <template #default="{ row }">{{ row.affected_total }} 盏</template>
+        </el-table-column>
+        <el-table-column label="平均恢复耗时" width="120" align="center">
+          <template #default="{ row }">{{ formatHours(row.avg_recovery_hours) }}</template>
+        </el-table-column>
+        <el-table-column label="遗留数量" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.legacy_total ? 'danger' : 'success'" size="small" effect="plain">
+              {{ row.legacy_total }} 盏
+            </el-tag>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
     <el-card shadow="never">
       <div class="section-title">故障高发道路 TOP5</div>
       <BarList :items="overview.top_roads" />
@@ -135,8 +167,9 @@ import StatCard from '@/components/common/StatCard.vue'
 import BarList from '@/components/common/BarList.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import { statusApi } from '@/api/status'
+import { regionApi } from '@/api/region'
 import { FAULT_LEVEL, FAULT_STATUS, RUN_STATUS } from '@/constants/dict'
-import { formatWaiting } from '@/utils/format'
+import { formatHours, formatWaiting } from '@/utils/format'
 
 const router = useRouter()
 const loading = ref(false)
@@ -154,6 +187,20 @@ const emptyOverview = () => ({
 })
 
 const overview = ref(emptyOverview())
+
+const regionLoading = ref(false)
+const regionCircuit = ref({ circuits: [] })
+
+async function loadRegionCircuit() {
+  regionLoading.value = true
+  try {
+    regionCircuit.value = await regionApi.circuitOverview()
+  } catch (error) {
+    regionCircuit.value = { circuits: [] }
+  } finally {
+    regionLoading.value = false
+  }
+}
 
 const runStatusItems = computed(() =>
   Object.entries(RUN_STATUS).map(([key, item]) => ({
@@ -181,11 +228,15 @@ async function load() {
   } finally {
     loading.value = false
   }
+  loadRegionCircuit()
 }
 
 function goTrack(row) {
   router.push({ path: '/status/track', query: { fault_no: row.fault_no } })
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadRegionCircuit()
+})
 </script>

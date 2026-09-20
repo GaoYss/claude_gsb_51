@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"streetlight/internal/apperr"
+	"streetlight/pkg/dbtx"
 	"streetlight/pkg/pagination"
 )
 
@@ -24,7 +25,7 @@ func NewRepository(db *gorm.DB) *Repository {
 }
 
 func (r *Repository) session(ctx context.Context) *gorm.DB {
-	return r.db.WithContext(ctx)
+	return dbtx.Session(ctx, r.db)
 }
 
 // Create 新增路灯。
@@ -75,6 +76,32 @@ func (r *Repository) GetByCode(ctx context.Context, code string) (*Lamp, error) 
 		return nil, fmt.Errorf("查询路灯失败: %w", err)
 	}
 	return &entity, nil
+}
+
+// ListByCircuit 查询同一回路下的全部路灯, 供区域故障按回路批量关联。
+func (r *Repository) ListByCircuit(ctx context.Context, circuitCode string) ([]Lamp, error) {
+	entities := make([]Lamp, 0)
+	err := r.session(ctx).
+		Where("circuit_code = ?", strings.TrimSpace(circuitCode)).
+		Order("road_name ASC, id ASC").
+		Find(&entities).Error
+	if err != nil {
+		return nil, fmt.Errorf("查询回路路灯失败: %w", err)
+	}
+	return entities, nil
+}
+
+// ListByIDs 按主键批量查询路灯。
+func (r *Repository) ListByIDs(ctx context.Context, ids []uint) ([]Lamp, error) {
+	entities := make([]Lamp, 0)
+	if len(ids) == 0 {
+		return entities, nil
+	}
+	err := r.session(ctx).Where("id IN ?", ids).Order("road_name ASC, id ASC").Find(&entities).Error
+	if err != nil {
+		return nil, fmt.Errorf("批量查询路灯失败: %w", err)
+	}
+	return entities, nil
 }
 
 // ExistsByCode 判断路灯编号是否已被占用, excludeID 用于更新场景排除自身。
@@ -168,7 +195,7 @@ func (r *Repository) CountByColumn(ctx context.Context, column string) (map[stri
 func (r *Repository) DistinctValues(ctx context.Context, column string) ([]string, error) {
 	values := make([]string, 0)
 	err := r.session(ctx).Model(&Lamp{}).
-		Where(column + " <> ''").
+		Where(column+" <> ''").
 		Distinct().
 		Order(column).
 		Pluck(column, &values).Error
@@ -209,6 +236,9 @@ func applyFilters(statement *gorm.DB, filter ListQuery) *gorm.DB {
 	}
 	if value := strings.TrimSpace(filter.District); value != "" {
 		statement = statement.Where("district = ?", value)
+	}
+	if value := strings.TrimSpace(filter.CircuitCode); value != "" {
+		statement = statement.Where("circuit_code = ?", value)
 	}
 	if value := strings.TrimSpace(filter.LampType); value != "" {
 		statement = statement.Where("lamp_type = ?", value)

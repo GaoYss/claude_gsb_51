@@ -73,6 +73,15 @@ func (s *Service) ListByFault(ctx context.Context, faultID uint) ([]Repair, erro
 
 // Create 录入维修记录(维修开工), 并联动故障与路灯状态。
 func (s *Service) Create(ctx context.Context, req CreateRequest) (*Repair, error) {
+	return s.create(ctx, req, false)
+}
+
+// CreateForRegion 供区域故障模块统一派工/再次派工调用, 跳过区域归属拦截。
+func (s *Service) CreateForRegion(ctx context.Context, req CreateRequest) (*Repair, error) {
+	return s.create(ctx, req, true)
+}
+
+func (s *Service) create(ctx context.Context, req CreateRequest, regional bool) (*Repair, error) {
 	target, err := s.faults.GetByID(ctx, req.FaultID)
 	if err != nil {
 		return nil, err
@@ -82,6 +91,9 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*Repair, error
 	}
 	if target.Status == fault.StatusRepaired {
 		return nil, apperr.Conflict("故障 %s 已修复, 如需返修请先登记新的维修记录并重新开工", target.FaultNo)
+	}
+	if !regional && target.RegionID != nil {
+		return nil, apperr.Conflict("故障 %s 归属区域故障单, 请在区域故障处置中统一派工", target.FaultNo)
 	}
 
 	ongoing, err := s.repo.GetOngoingByFault(ctx, target.ID)

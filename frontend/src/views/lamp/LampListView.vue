@@ -11,6 +11,9 @@
         <el-select v-model="query.road_name" placeholder="所在道路" clearable>
           <el-option v-for="road in dictStore.lampOptions.roads" :key="road" :label="road" :value="road" />
         </el-select>
+        <el-select v-model="query.circuit_code" placeholder="所属回路" clearable>
+          <el-option v-for="item in dictStore.lampOptions.circuit_codes" :key="item" :label="item" :value="item" />
+        </el-select>
         <el-select v-model="query.lamp_type" placeholder="灯具类型" clearable>
           <el-option v-for="item in dictStore.lampOptions.lamp_types" :key="item" :label="item" :value="item" />
         </el-select>
@@ -27,6 +30,7 @@
         <el-table-column prop="code" label="路灯编号" width="120" fixed="left" />
         <el-table-column prop="name" label="名称" min-width="150" show-overflow-tooltip />
         <el-table-column prop="road_name" label="所在道路" min-width="120" show-overflow-tooltip />
+        <el-table-column prop="circuit_code" label="所属回路" width="130" />
         <el-table-column prop="district" label="区域" width="100" />
         <el-table-column prop="lamp_type" label="灯具类型" width="110" />
         <el-table-column label="功率" width="90">
@@ -64,6 +68,7 @@
       :next-code="dictStore.lampOptions.next_code"
       :road-options="dictStore.lampOptions.roads"
       :district-options="dictStore.lampOptions.districts"
+      :circuit-options="dictStore.lampOptions.circuit_codes"
       :lamp-type-options="dictStore.lampOptions.lamp_types"
       @saved="handleSaved"
     />
@@ -90,7 +95,7 @@ const dictStore = useDictStore()
 
 const { loading, rows, total, query, load, search, reset, changePage, changePageSize } = useListPage(
   lampApi.list,
-  { keyword: '', road_name: '', lamp_type: '', run_status: '' },
+  { keyword: '', road_name: '', circuit_code: '', lamp_type: '', run_status: '' },
 )
 
 const dialogVisible = ref(false)

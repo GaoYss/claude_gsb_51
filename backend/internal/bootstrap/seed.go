@@ -9,6 +9,7 @@ import (
 
 	"streetlight/internal/modules/fault"
 	"streetlight/internal/modules/lamp"
+	"streetlight/internal/modules/region"
 	"streetlight/internal/modules/repair"
 )
 
@@ -146,12 +147,25 @@ func seed(db *gorm.DB) error {
 		return err
 	}
 
+	if err := seedRegionFaults(db, now, lamps); err != nil {
+		return err
+	}
+
 	slog.Info("演示数据初始化完成",
 		"路灯", len(lamps),
 		"故障", len(faults),
 		"维修记录", len(repairs),
 	)
 	return nil
+}
+
+// circuitAbbr 返回道路名称的回路编号缩写。
+func circuitAbbr(roadName string) string {
+	runes := []rune(roadName)
+	if len(runes) >= 2 {
+		return string([]rune{runes[0], runes[len(runes)-1]})
+	}
+	return roadName
 }
 
 // buildSeedLamps 生成 6 条道路共 30 盏路灯的台账数据。
@@ -184,6 +198,7 @@ func buildSeedLamps(now time.Time) []lamp.Lamp {
 				Name:        fmt.Sprintf("%s%d号灯杆", road.name, position+1),
 				RoadName:    road.name,
 				District:    road.district,
+				CircuitCode: fmt.Sprintf("WL-%s-%02d", circuitAbbr(road.name), roadIndex+1),
 				Address:     fmt.Sprintf("%s%d号", road.name, (position+1)*100),
 				Longitude:   116.40 + float64(roadIndex)*0.01 + float64(position)*0.001,
 				Latitude:    39.90 + float64(roadIndex)*0.01 + float64(position)*0.001,
@@ -374,5 +389,199 @@ func syncSeedLampStatus(db *gorm.DB, faults []fault.Fault, lamps []lamp.Lamp) er
 			return fmt.Errorf("同步演示路灯运行状态失败: %w", err)
 		}
 	}
+	return nil
+}
+
+// seedRegionFaults 写入区域故障演示数据: 覆盖待派工、处置中(含遗留)、已闭环三个典型场景。
+// 选取没有单灯故障占用的三个回路(滨江路 / 解放路 / 学院路), 直接落库构造主子单与维修记录。
+func seedRegionFaults(db *gorm.DB, now time.Time, lamps []lamp.Lamp) error {
+	type childSeed struct {
+		lampIndex    int
+		status       string
+		repairResult string // 为空表示该子单无维修记录
+		finished     bool
+	}
+	type regionSeed struct {
+		cause       string
+		level       string
+		reportedAgo time.Duration
+		status      string
+		dispatched  bool
+		dispatchAgo time.Duration
+		restoredAgo time.Duration // >0 表示全部恢复时间
+		closed      bool
+		closeAgo    time.Duration
+		repairman   string
+		team        string
+		description string
+		children    []childSeed
+	}
+
+	cases := []regionSeed{
+		{
+			cause: region.CauseCabinet, level: fault.LevelUrgent, reportedAgo: 2 * hour,
+			status: region.StatusPending, description: "控制箱失电, 滨江路该回路 4 盏路灯全部不亮, 等待统一派工",
+			children: []childSeed{
+				{lampIndex: 15, status: fault.StatusPending},
+				{lampIndex: 16, status: fault.StatusPending},
+				{lampIndex: 17, status: fault.StatusPending},
+				{lampIndex: 18, status: fault.StatusPending},
+			},
+		},
+		{
+			cause: region.CauseLine, level: fault.LevelHigh, reportedAgo: 8 * hour,
+			status: region.StatusProcessing, dispatched: true, dispatchAgo: 7 * hour,
+			repairman: "陈鹏", team: "市政照明二班",
+			description: "解放路地埋电缆中间接头烧蚀, 同回路 4 盏路灯失电, 已完成 3 盏, 剩余 1 盏待配件",
+			children: []childSeed{
+				{lampIndex: 20, status: fault.StatusRepaired, repairResult: repair.ResultFixed, finished: true},
+				{lampIndex: 21, status: fault.StatusRepaired, repairResult: repair.ResultFixed, finished: true},
+				{lampIndex: 22, status: fault.StatusRepaired, repairResult: repair.ResultFixed, finished: true},
+				{lampIndex: 23, status: fault.StatusProcessing, repairResult: repair.ResultPendingParts, finished: true},
+			},
+		},
+		{
+			cause: region.CauseLine, level: fault.LevelHigh, reportedAgo: 72 * hour,
+			status: region.StatusClosed, dispatched: true, dispatchAgo: 70 * hour,
+			restoredAgo: 60 * hour, closed: true, closeAgo: 58 * hour,
+			repairman: "周涛", team: "市政照明一班",
+			description: "学院路控制箱出线短路导致同回路 4 盏路灯熄灭, 线路检修后全部恢复并闭环",
+			children: []childSeed{
+				{lampIndex: 25, status: fault.StatusClosed, repairResult: repair.ResultFixed, finished: true},
+				{lampIndex: 26, status: fault.StatusClosed, repairResult: repair.ResultFixed, finished: true},
+				{lampIndex: 27, status: fault.StatusClosed, repairResult: repair.ResultFixed, finished: true},
+				{lampIndex: 28, status: fault.StatusClosed, repairResult: repair.ResultFixed, finished: true},
+			},
+		},
+	}
+
+	gdSeq, wxSeq, qySeq := 9000, 9000, 9000
+	for _, item := range cases {
+		reportedAt := now.Add(-item.reportedAgo)
+		first := lamps[item.children[0].lampIndex]
+		qySeq++
+		regionEntity := region.RegionFault{
+			No:            fmt.Sprintf("QY%s%04d", reportedAt.Format("20060102"), qySeq),
+			CircuitCode:   first.CircuitCode,
+			RoadName:      first.RoadName,
+			Cause:         item.cause,
+			FaultLevel:    item.level,
+			Source:        fault.SourceMonitoring,
+			Description:   item.description,
+			Reporter:      "监控中心",
+			ReporterPhone: "13800001234",
+			ReportedAt:    reportedAt,
+			Status:        item.status,
+			AffectedCount: len(item.children),
+			RestoredCount: 0,
+		}
+		if item.dispatched {
+			dispatchedAt := now.Add(-item.dispatchAgo)
+			regionEntity.DispatchedAt = &dispatchedAt
+			regionEntity.DispatchRepairman = item.repairman
+			regionEntity.DispatchTeam = item.team
+			regionEntity.ContactPhone = "13900005678"
+		}
+		if err := db.Create(&regionEntity).Error; err != nil {
+			return fmt.Errorf("写入区域故障演示数据失败: %w", err)
+		}
+
+		restored := 0
+		lampStatus := map[uint]string{}
+		for _, child := range item.children {
+			device := lamps[child.lampIndex]
+			gdSeq++
+			childFault := fault.Fault{
+				FaultNo:       fmt.Sprintf("GD%s%04d", reportedAt.Format("20060102"), gdSeq),
+				LampID:        device.ID,
+				LampCode:      device.Code,
+				RoadName:      device.RoadName,
+				FaultType:     item.cause,
+				FaultLevel:    item.level,
+				Source:        fault.SourceMonitoring,
+				Description:   item.description,
+				Reporter:      "监控中心",
+				ReporterPhone: "13800001234",
+				ReportedAt:    reportedAt,
+				Status:        child.status,
+				RegionID:      &regionEntity.ID,
+			}
+			if child.status == fault.StatusClosed {
+				closedAt := now.Add(-item.closeAgo)
+				childFault.ClosedAt = &closedAt
+				childFault.CloseRemark = "区域故障整体闭环"
+			}
+			if err := db.Create(&childFault).Error; err != nil {
+				return fmt.Errorf("写入区域子故障演示数据失败: %w", err)
+			}
+
+			if child.repairResult != "" {
+				startedAt := reportedAt.Add(time.Hour)
+				wxSeq++
+				record := repair.Repair{
+					RepairNo:     fmt.Sprintf("WX%s%04d", startedAt.Format("20060102"), wxSeq),
+					FaultID:      childFault.ID,
+					FaultNo:      childFault.FaultNo,
+					LampID:       device.ID,
+					LampCode:     device.Code,
+					Repairman:    item.repairman,
+					RepairTeam:   item.team,
+					ContactPhone: "13900005678",
+					StartedAt:    startedAt,
+					Status:       repair.StatusOngoing,
+					Content:      "区域故障统一派工处置",
+					Cost:         120,
+				}
+				if child.finished {
+					finishedAt := startedAt.Add(3 * time.Hour)
+					record.FinishedAt = &finishedAt
+					record.Status = repair.StatusFinished
+					record.Result = child.repairResult
+				}
+				if err := db.Create(&record).Error; err != nil {
+					return fmt.Errorf("写入区域维修演示数据失败: %w", err)
+				}
+				if err := db.Model(&fault.Fault{}).Where("id = ?", childFault.ID).
+					Updates(map[string]any{"repair_count": 1, "latest_repair_id": record.ID}).Error; err != nil {
+					return err
+				}
+			}
+
+			switch child.status {
+			case fault.StatusProcessing:
+				lampStatus[device.ID] = lamp.RunStatusMaintenance
+			case fault.StatusPending:
+				if lampStatus[device.ID] != lamp.RunStatusMaintenance {
+					lampStatus[device.ID] = lamp.RunStatusFault
+				}
+			case fault.StatusRepaired:
+				lampStatus[device.ID] = lamp.RunStatusNormal
+			}
+			if child.status == fault.StatusRepaired || child.status == fault.StatusClosed {
+				restored++
+			}
+		}
+		for lampID, runStatus := range lampStatus {
+			if err := db.Model(&lamp.Lamp{}).Where("id = ?", lampID).Update("run_status", runStatus).Error; err != nil {
+				return fmt.Errorf("同步区域故障路灯状态失败: %w", err)
+			}
+		}
+
+		updates := map[string]any{"restored_count": restored}
+		if item.restoredAgo > 0 {
+			restoredAt := now.Add(-item.restoredAgo)
+			updates["restored_at"] = restoredAt
+		}
+		if item.closed {
+			closedAt := now.Add(-item.closeAgo)
+			updates["closed_at"] = closedAt
+			updates["close_remark"] = "全部路灯恢复照明, 区域故障整体闭环"
+		}
+		if err := db.Model(&region.RegionFault{}).Where("id = ?", regionEntity.ID).Updates(updates).Error; err != nil {
+			return fmt.Errorf("回填区域故障演示数据失败: %w", err)
+		}
+	}
+
+	slog.Info("区域故障演示数据初始化完成", "区域故障单", len(cases))
 	return nil
 }

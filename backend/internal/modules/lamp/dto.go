@@ -8,6 +8,7 @@ type CreateRequest struct {
 	Name        string   `json:"name" binding:"max=128"`
 	RoadName    string   `json:"road_name" binding:"required,max=128"`
 	District    string   `json:"district" binding:"max=64"`
+	CircuitCode string   `json:"circuit_code" binding:"max=64"`
 	Address     string   `json:"address" binding:"max=255"`
 	Longitude   *float64 `json:"longitude" binding:"omitempty,min=-180,max=180"`
 	Latitude    *float64 `json:"latitude" binding:"omitempty,min=-90,max=90"`
@@ -25,6 +26,7 @@ type UpdateRequest struct {
 	Name        *string  `json:"name" binding:"omitempty,max=128"`
 	RoadName    *string  `json:"road_name" binding:"omitempty,max=128"`
 	District    *string  `json:"district" binding:"omitempty,max=64"`
+	CircuitCode *string  `json:"circuit_code" binding:"omitempty,max=64"`
 	Address     *string  `json:"address" binding:"omitempty,max=255"`
 	Longitude   *float64 `json:"longitude" binding:"omitempty,min=-180,max=180"`
 	Latitude    *float64 `json:"latitude" binding:"omitempty,min=-90,max=90"`
@@ -39,11 +41,12 @@ type UpdateRequest struct {
 // ListQuery 路灯台账列表查询条件。
 type ListQuery struct {
 	pagination.Params
-	Keyword   string `form:"keyword"`   // 编号 / 名称 / 道路 / 地址 模糊匹配
-	RoadName  string `form:"road_name"` // 精确匹配
-	District  string `form:"district"`
-	LampType  string `form:"lamp_type"`
-	RunStatus string `form:"run_status"`
+	Keyword     string `form:"keyword"`   // 编号 / 名称 / 道路 / 地址 模糊匹配
+	RoadName    string `form:"road_name"` // 精确匹配
+	District    string `form:"district"`
+	CircuitCode string `form:"circuit_code"`
+	LampType    string `form:"lamp_type"`
+	RunStatus   string `form:"run_status"`
 }
 
 // Statistics 路灯台账统计结果。
@@ -56,9 +59,10 @@ type Statistics struct {
 
 // Options 前端下拉选项与建议编号。
 type Options struct {
-	Roads       []string `json:"roads"`
-	Districts   []string `json:"districts"`
-	LampTypes   []string `json:"lamp_types"`
-	RunStatuses []string `json:"run_statuses"`
-	NextCode    string   `json:"next_code"`
+	Roads        []string `json:"roads"`
+	Districts    []string `json:"districts"`
+	CircuitCodes []string `json:"circuit_codes"`
+	LampTypes    []string `json:"lamp_types"`
+	RunStatuses  []string `json:"run_statuses"`
+	NextCode     string   `json:"next_code"`
 }

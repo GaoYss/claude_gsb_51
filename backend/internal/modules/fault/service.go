@@ -76,6 +76,15 @@ func (s *Service) ListByLamp(ctx context.Context, lampID uint) ([]Fault, error) 
 
 // Create 登记故障: 校验路灯存在、无未闭环故障后落库, 并同步路灯运行状态。
 func (s *Service) Create(ctx context.Context, req CreateRequest) (*Fault, error) {
+	return s.create(ctx, req, nil)
+}
+
+// CreateRegional 登记区域故障下的子故障, 由区域故障模块统一驱动, 其余校验与普通故障一致。
+func (s *Service) CreateRegional(ctx context.Context, req CreateRequest, regionID uint) (*Fault, error) {
+	return s.create(ctx, req, &regionID)
+}
+
+func (s *Service) create(ctx context.Context, req CreateRequest, regionID *uint) (*Fault, error) {
 	device, err := s.lamps.Get(ctx, req.LampID)
 	if err != nil {
 		return nil, err
@@ -125,6 +134,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*Fault, error)
 		ReporterPhone: strings.TrimSpace(req.ReporterPhone),
 		ReportedAt:    reportedAt,
 		Status:        StatusPending,
+		RegionID:      regionID,
 	}
 
 	if err := s.repo.CreateWithUniqueNo(ctx, entity, faultNoPrefix(reportedAt)); err != nil {
@@ -137,7 +147,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*Fault, error)
 	return entity, nil
 }
 
-// Update 修改故障登记信息, 已关闭的故障不允许修改。
+// Update 修改故障登记信息, 已关闭或归属区域故障单的故障不允许在此修改。
 func (s *Service) Update(ctx context.Context, id uint, req UpdateRequest) (*Fault, error) {
 	entity, err := s.repo.GetByID(ctx, id)
 	if err != nil {
@@ -145,6 +155,9 @@ func (s *Service) Update(ctx context.Context, id uint, req UpdateRequest) (*Faul
 	}
 	if entity.Status == StatusClosed {
 		return nil, apperr.Conflict("故障 %s 已关闭, 不允许修改", entity.FaultNo)
+	}
+	if entity.RegionID != nil {
+		return nil, apperr.Conflict("故障 %s 归属区域故障单, 请在区域故障处置中统一操作", entity.FaultNo)
 	}
 
 	if req.FaultType != nil {
@@ -187,14 +200,26 @@ func (s *Service) Update(ctx context.Context, id uint, req UpdateRequest) (*Faul
 	return entity, nil
 }
 
-// Close 关闭故障, 用于确认闭环或作废处理。
+// Close 关闭故障, 用于确认闭环或作废处理。归属区域故障单的子故障只能随区域单统一闭环。
 func (s *Service) Close(ctx context.Context, id uint, req CloseRequest) (*Fault, error) {
+	return s.close(ctx, id, req, false)
+}
+
+// CloseForRegion 供区域故障模块在整体闭环时逐盏关闭子故障, 跳过区域归属拦截。
+func (s *Service) CloseForRegion(ctx context.Context, id uint, req CloseRequest) (*Fault, error) {
+	return s.close(ctx, id, req, true)
+}
+
+func (s *Service) close(ctx context.Context, id uint, req CloseRequest, regional bool) (*Fault, error) {
 	entity, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	if entity.Status == StatusClosed {
 		return nil, apperr.Conflict("故障 %s 已关闭, 无需重复操作", entity.FaultNo)
+	}
+	if !regional && entity.RegionID != nil {
+		return nil, apperr.Conflict("故障 %s 归属区域故障单, 请在区域故障闭环时统一关闭", entity.FaultNo)
 	}
 	if !canTransitTo(entity.Status, StatusClosed) {
 		return nil, apperr.Conflict("故障 %s 当前状态为 %s, 不允许关闭", entity.FaultNo, StatusLabel(entity.Status))
@@ -214,11 +239,29 @@ func (s *Service) Close(ctx context.Context, id uint, req CloseRequest) (*Fault,
 	return entity, nil
 }
 
+// DetachRegion 将子故障移出区域故障单(转为普通故障), 并重新计算路灯运行状态。
+func (s *Service) DetachRegion(ctx context.Context, faultID uint) error {
+	entity, err := s.repo.GetByID(ctx, faultID)
+	if err != nil {
+		return err
+	}
+	if entity.RegionID == nil {
+		return nil
+	}
+	if err := s.repo.UpdateColumns(ctx, faultID, map[string]any{"region_id": nil}); err != nil {
+		return err
+	}
+	return s.syncLampStatus(ctx, entity.LampID)
+}
+
 // Delete 删除故障, 仅允许删除已关闭且没有维修记录的故障。
 func (s *Service) Delete(ctx context.Context, id uint) error {
 	entity, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return err
+	}
+	if entity.RegionID != nil {
+		return apperr.Conflict("故障 %s 归属区域故障单, 不允许单独删除", entity.FaultNo)
 	}
 	if entity.Status != StatusClosed {
 		return apperr.Conflict("仅已关闭的故障允许删除, 当前状态: %s", StatusLabel(entity.Status))
